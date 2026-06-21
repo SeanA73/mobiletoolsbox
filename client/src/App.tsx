@@ -5,6 +5,9 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ErrorBoundary } from "@/components/error-boundary";
 import SmartRouter from "@/components/smart-router";
+import ToolsIndex from "@/pages/tools-index";
+import ToolPage from "@/pages/tool-page";
+import Account from "@/pages/account";
 import Subscribe from "@/pages/subscribe";
 import Pricing from "@/pages/pricing";
 import Checkout from "@/pages/checkout";
@@ -18,6 +21,9 @@ import NotFound from "@/pages/not-found";
 function Router() {
   return (
     <Switch>
+      <Route path="/account" component={Account} />
+      <Route path="/tools/:slug" component={ToolPage} />
+      <Route path="/tools" component={ToolsIndex} />
       <Route path="/subscribe" component={Subscribe} />
       <Route path="/pricing" component={Pricing} />
       <Route path="/checkout" component={Checkout} />

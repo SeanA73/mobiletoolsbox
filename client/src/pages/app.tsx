@@ -2,7 +2,7 @@ import { useState, useEffect, lazy, Suspense } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Link } from "wouter";
+import { Link, useSearch } from "wouter";
 import Navbar from "@/components/navbar";
 import PremiumFeatureGuard from "@/components/premium-feature-guard";
 import AdBanner from "@/components/ad-banner";
@@ -216,13 +216,37 @@ const getAllCategories = (availableTools: Tool[]) => [
 ];
 
 export default function App() {
-  const [selectedTool, setSelectedTool] = useState<string | null>(null);
+  const searchString = useSearch();
+  // Read an optional ?tool=<id> deep link so SEO tool pages can land users
+  // directly on the right tool instead of the generic grid.
+  const initialTool = (() => {
+    const params = new URLSearchParams(searchString);
+    const requested = params.get("tool");
+    return requested && tools.some(t => t.id === requested) ? requested : null;
+  })();
+
+  const [selectedTool, setSelectedToolState] = useState<string | null>(initialTool);
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [showFeedback, setShowFeedback] = useState(false);
   const [showRevenue, setShowRevenue] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [adSenseLoaded, setAdSenseLoaded] = useState(false);
   const { isAdmin } = useAuth();
+
+  // Update tool selection AND keep the URL in sync, so deep links, the browser
+  // back button, and shareable links all behave correctly.
+  const setSelectedTool = (toolId: string | null) => {
+    setSelectedToolState(toolId);
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      if (toolId) {
+        url.searchParams.set("tool", toolId);
+      } else {
+        url.searchParams.delete("tool");
+      }
+      window.history.replaceState({}, "", url.toString());
+    }
+  };
 
   // Initialize AdSense - defer to not block initial render
   useEffect(() => {

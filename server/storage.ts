@@ -14,8 +14,10 @@ import { db } from "./db";
 import { eq, inArray, desc, and, gte, lte } from "drizzle-orm";
 
 export interface IStorage {
-  // Users (for Replit Auth)
+  // Users
   getUser(id: string): Promise<User | undefined>;
+  getUserByEmail(email: string): Promise<User | undefined>;
+  createLocalUser(user: { id: string; email: string; password: string; firstName?: string; lastName?: string }): Promise<User>;
   upsertUser(user: UpsertUser): Promise<User>;
   updateUserStripeInfo(id: string, customerId: string, subscriptionId: string): Promise<User>;
   updateUserSubscriptionStatus(id: string, status: string): Promise<User>;
@@ -35,43 +37,43 @@ export interface IStorage {
   // Todos
   getTodosByUserId(userId: string): Promise<Todo[]>;
   createTodo(todo: InsertTodo): Promise<Todo>;
-  updateTodo(id: number, todo: Partial<Todo>): Promise<Todo>;
-  deleteTodo(id: number): Promise<void>;
+  updateTodo(id: number, userId: string, todo: Partial<Todo>): Promise<Todo | undefined>;
+  deleteTodo(id: number, userId: string): Promise<boolean>;
 
   // Notes
   getNotesByUserId(userId: string): Promise<Note[]>;
   createNote(note: InsertNote): Promise<Note>;
-  updateNote(id: number, note: Partial<Note>): Promise<Note>;
-  deleteNote(id: number): Promise<void>;
+  updateNote(id: number, userId: string, note: Partial<Note>): Promise<Note | undefined>;
+  deleteNote(id: number, userId: string): Promise<boolean>;
 
   // Voice Recordings
   getVoiceRecordingsByUserId(userId: string): Promise<VoiceRecording[]>;
   createVoiceRecording(recording: InsertVoiceRecording): Promise<VoiceRecording>;
-  updateVoiceRecording(id: number, updateData: Partial<VoiceRecording>): Promise<VoiceRecording>;
-  deleteVoiceRecording(id: number): Promise<void>;
+  updateVoiceRecording(id: number, userId: string, updateData: Partial<VoiceRecording>): Promise<VoiceRecording | undefined>;
+  deleteVoiceRecording(id: number, userId: string): Promise<boolean>;
 
   // Flashcard Decks
   getFlashcardDecksByUserId(userId: string): Promise<FlashcardDeck[]>;
   createFlashcardDeck(deck: InsertFlashcardDeck): Promise<FlashcardDeck>;
-  deleteFlashcardDeck(id: number): Promise<void>;
+  deleteFlashcardDeck(id: number, userId: string): Promise<boolean>;
 
   // Flashcards
   getFlashcardsByDeckId(deckId: number): Promise<Flashcard[]>;
   createFlashcard(flashcard: InsertFlashcard): Promise<Flashcard>;
-  updateFlashcard(id: number, flashcard: Partial<Flashcard>): Promise<Flashcard>;
-  deleteFlashcard(id: number): Promise<void>;
+  updateFlashcard(id: number, userId: string, flashcard: Partial<Flashcard>): Promise<Flashcard | undefined>;
+  deleteFlashcard(id: number, userId: string): Promise<boolean>;
 
   // Habits
   getHabitsByUserId(userId: string): Promise<Habit[]>;
   createHabit(habit: InsertHabit): Promise<Habit>;
-  updateHabit(id: number, habit: Partial<Habit>): Promise<Habit>;
-  deleteHabit(id: number): Promise<void>;
+  updateHabit(id: number, userId: string, habit: Partial<Habit>): Promise<Habit | undefined>;
+  deleteHabit(id: number, userId: string): Promise<boolean>;
 
   // Habit Logs
   getHabitLogsByHabitId(habitId: number): Promise<HabitLog[]>;
   getHabitLogsByUserId(userId: string): Promise<HabitLog[]>;
   createHabitLog(log: InsertHabitLog): Promise<HabitLog>;
-  deleteHabitLog(id: number): Promise<void>;
+  deleteHabitLog(id: number, userId: string): Promise<boolean>;
 
   // Feedback
   getFeedbackByUserId(userId: string): Promise<Feedback[]>;
@@ -120,6 +122,19 @@ export class DatabaseStorage implements IStorage {
   async getUser(id: string): Promise<User | undefined> {
     const [user] = await db.select().from(users).where(eq(users.id, id));
     return user || undefined;
+  }
+
+  async getUserByEmail(email: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.email, email));
+    return user || undefined;
+  }
+
+  async createLocalUser(userData: { id: string; email: string; password: string; firstName?: string; lastName?: string }): Promise<User> {
+    const [user] = await db
+      .insert(users)
+      .values(userData)
+      .returning();
+    return user;
   }
 
   async upsertUser(userData: UpsertUser): Promise<User> {
@@ -294,17 +309,21 @@ export class DatabaseStorage implements IStorage {
     return todo;
   }
 
-  async updateTodo(id: number, todoUpdate: Partial<Todo>): Promise<Todo> {
+  async updateTodo(id: number, userId: string, todoUpdate: Partial<Todo>): Promise<Todo | undefined> {
     const [todo] = await db
       .update(todos)
       .set({ ...todoUpdate, updatedAt: new Date() })
-      .where(eq(todos.id, id))
+      .where(and(eq(todos.id, id), eq(todos.userId, userId)))
       .returning();
-    return todo;
+    return todo || undefined;
   }
 
-  async deleteTodo(id: number): Promise<void> {
-    await db.delete(todos).where(eq(todos.id, id));
+  async deleteTodo(id: number, userId: string): Promise<boolean> {
+    const result = await db
+      .delete(todos)
+      .where(and(eq(todos.id, id), eq(todos.userId, userId)))
+      .returning({ id: todos.id });
+    return result.length > 0;
   }
 
   // Notes
@@ -320,17 +339,21 @@ export class DatabaseStorage implements IStorage {
     return note;
   }
 
-  async updateNote(id: number, noteUpdate: Partial<Note>): Promise<Note> {
+  async updateNote(id: number, userId: string, noteUpdate: Partial<Note>): Promise<Note | undefined> {
     const [note] = await db
       .update(notes)
       .set({ ...noteUpdate, updatedAt: new Date() })
-      .where(eq(notes.id, id))
+      .where(and(eq(notes.id, id), eq(notes.userId, userId)))
       .returning();
-    return note;
+    return note || undefined;
   }
 
-  async deleteNote(id: number): Promise<void> {
-    await db.delete(notes).where(eq(notes.id, id));
+  async deleteNote(id: number, userId: string): Promise<boolean> {
+    const result = await db
+      .delete(notes)
+      .where(and(eq(notes.id, id), eq(notes.userId, userId)))
+      .returning({ id: notes.id });
+    return result.length > 0;
   }
 
   // Voice Recordings
@@ -346,17 +369,21 @@ export class DatabaseStorage implements IStorage {
     return recording;
   }
 
-  async updateVoiceRecording(id: number, updateData: Partial<VoiceRecording>): Promise<VoiceRecording> {
+  async updateVoiceRecording(id: number, userId: string, updateData: Partial<VoiceRecording>): Promise<VoiceRecording | undefined> {
     const [recording] = await db
       .update(voiceRecordings)
       .set({ ...updateData, updatedAt: new Date() })
-      .where(eq(voiceRecordings.id, id))
+      .where(and(eq(voiceRecordings.id, id), eq(voiceRecordings.userId, userId)))
       .returning();
-    return recording;
+    return recording || undefined;
   }
 
-  async deleteVoiceRecording(id: number): Promise<void> {
-    await db.delete(voiceRecordings).where(eq(voiceRecordings.id, id));
+  async deleteVoiceRecording(id: number, userId: string): Promise<boolean> {
+    const result = await db
+      .delete(voiceRecordings)
+      .where(and(eq(voiceRecordings.id, id), eq(voiceRecordings.userId, userId)))
+      .returning({ id: voiceRecordings.id });
+    return result.length > 0;
   }
 
   // Flashcard Decks
@@ -372,13 +399,20 @@ export class DatabaseStorage implements IStorage {
     return deck;
   }
 
-  async deleteFlashcardDeck(id: number): Promise<void> {
-    // Delete all flashcards in this deck first
+  async deleteFlashcardDeck(id: number, userId: string): Promise<boolean> {
+    // Verify ownership before touching anything
+    const [deck] = await db
+      .select()
+      .from(flashcardDecks)
+      .where(and(eq(flashcardDecks.id, id), eq(flashcardDecks.userId, userId)));
+    if (!deck) return false;
+
     await db.delete(flashcards).where(eq(flashcards.deckId, id));
     await db.delete(flashcardDecks).where(eq(flashcardDecks.id, id));
+    return true;
   }
 
-  // Flashcards
+  // Flashcards (ownership lives on the parent deck)
   async getFlashcardsByDeckId(deckId: number): Promise<Flashcard[]> {
     return await db.select().from(flashcards).where(eq(flashcards.deckId, deckId));
   }
@@ -391,17 +425,33 @@ export class DatabaseStorage implements IStorage {
     return flashcard;
   }
 
-  async updateFlashcard(id: number, flashcardUpdate: Partial<Flashcard>): Promise<Flashcard> {
+  private async getOwnedDeckIdForFlashcard(flashcardId: number, userId: string): Promise<number | undefined> {
+    const [row] = await db
+      .select({ deckId: flashcards.deckId })
+      .from(flashcards)
+      .innerJoin(flashcardDecks, eq(flashcards.deckId, flashcardDecks.id))
+      .where(and(eq(flashcards.id, flashcardId), eq(flashcardDecks.userId, userId)));
+    return row?.deckId;
+  }
+
+  async updateFlashcard(id: number, userId: string, flashcardUpdate: Partial<Flashcard>): Promise<Flashcard | undefined> {
+    const owned = await this.getOwnedDeckIdForFlashcard(id, userId);
+    if (!owned) return undefined;
+
     const [flashcard] = await db
       .update(flashcards)
       .set(flashcardUpdate)
       .where(eq(flashcards.id, id))
       .returning();
-    return flashcard;
+    return flashcard || undefined;
   }
 
-  async deleteFlashcard(id: number): Promise<void> {
+  async deleteFlashcard(id: number, userId: string): Promise<boolean> {
+    const owned = await this.getOwnedDeckIdForFlashcard(id, userId);
+    if (!owned) return false;
+
     await db.delete(flashcards).where(eq(flashcards.id, id));
+    return true;
   }
 
   // Habits
@@ -417,22 +467,28 @@ export class DatabaseStorage implements IStorage {
     return habit;
   }
 
-  async updateHabit(id: number, habitUpdate: Partial<Habit>): Promise<Habit> {
+  async updateHabit(id: number, userId: string, habitUpdate: Partial<Habit>): Promise<Habit | undefined> {
     const [habit] = await db
       .update(habits)
       .set(habitUpdate)
-      .where(eq(habits.id, id))
+      .where(and(eq(habits.id, id), eq(habits.userId, userId)))
       .returning();
-    return habit;
+    return habit || undefined;
   }
 
-  async deleteHabit(id: number): Promise<void> {
-    // Delete all habit logs for this habit first
+  async deleteHabit(id: number, userId: string): Promise<boolean> {
+    const [habit] = await db
+      .select()
+      .from(habits)
+      .where(and(eq(habits.id, id), eq(habits.userId, userId)));
+    if (!habit) return false;
+
     await db.delete(habitLogs).where(eq(habitLogs.habitId, id));
     await db.delete(habits).where(eq(habits.id, id));
+    return true;
   }
 
-  // Habit Logs
+  // Habit Logs (ownership lives on the parent habit)
   async getHabitLogsByHabitId(habitId: number): Promise<HabitLog[]> {
     return await db.select().from(habitLogs).where(eq(habitLogs.habitId, habitId));
   }
@@ -453,8 +509,16 @@ export class DatabaseStorage implements IStorage {
     return log;
   }
 
-  async deleteHabitLog(id: number): Promise<void> {
+  async deleteHabitLog(id: number, userId: string): Promise<boolean> {
+    const [row] = await db
+      .select({ id: habitLogs.id })
+      .from(habitLogs)
+      .innerJoin(habits, eq(habitLogs.habitId, habits.id))
+      .where(and(eq(habitLogs.id, id), eq(habits.userId, userId)));
+    if (!row) return false;
+
     await db.delete(habitLogs).where(eq(habitLogs.id, id));
+    return true;
   }
 
   // Feedback

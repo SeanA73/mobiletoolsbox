@@ -79,6 +79,7 @@ export default function Landing() {
               <a href="#pricing" className="text-slate-600 hover:text-primary transition-colors">Pricing</a>
               <a href="#download" className="text-slate-600 hover:text-primary transition-colors">Download</a>
               <a href="#contact" className="text-slate-600 hover:text-primary transition-colors">Contact</a>
+              <Link href="/account" className="text-slate-600 hover:text-primary transition-colors">Sign In</Link>
               <Button asChild>
                 <Link href="/app">Get Started</Link>
               </Button>
@@ -101,6 +102,7 @@ export default function Landing() {
               <a href="#pricing" className="block px-3 py-2 text-slate-600 hover:text-primary">Pricing</a>
               <a href="#download" className="block px-3 py-2 text-slate-600 hover:text-primary">Download</a>
               <a href="#contact" className="block px-3 py-2 text-slate-600 hover:text-primary">Contact</a>
+              <Link href="/account" className="block px-3 py-2 text-slate-600 hover:text-primary">Sign In</Link>
               <div className="px-3 py-2">
                 <Button asChild className="w-full">
                   <Link href="/app">Get Started</Link>

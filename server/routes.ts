@@ -2,7 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { insertProjectSchema, insertTimeEntrySchema, insertTaskTemplateSchema } from "@shared/schema";
-import { setupAuth } from "./replitAuth";
+import { setupAuth, isAuthenticated } from "./localAuth";
 import Stripe from "stripe";
 import { 
   insertTodoSchema, insertNoteSchema, insertVoiceRecordingSchema,
@@ -15,38 +15,38 @@ import { EmailService } from "./email-service";
 const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  // Temporary mock auth for demo - replace with proper auth later
-  app.use('/api', (req, res, next) => {
-    // Mock user session for demo with admin role
-    req.user = { 
-      claims: { sub: '927070657' }, // Admin user for development
-      isAuthenticated: () => true 
-    };
-    next();
-  });
+  await setupAuth(app);
+
+  // Admin-only middleware (defined early so it's available to every route below)
+  const requireAdmin = async (req: any, res: any, next: any) => {
+    try {
+      const userId = req.user?.claims?.sub;
+      if (!userId) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const user = await storage.getUser(userId);
+      if (!user || (user.role !== 'admin' && user.role !== 'superuser')) {
+        return res.status(403).json({ message: "Forbidden: Admin access required" });
+      }
+
+      next();
+    } catch (error) {
+      console.error("Admin check error:", error);
+      res.status(500).json({ message: "Server error" });
+    }
+  };
 
   // Auth routes
-  app.get('/api/auth/user', async (req: any, res) => {
+  app.get('/api/auth/user', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
-      // For development without database, return mock user
-      const mockUser = {
-        id: userId,
-        email: 'admin@mobiletoolsbox.com',
-        firstName: 'Admin',
-        lastName: 'User',
-        role: 'admin', // Always admin in dev mode
-        subscriptionStatus: 'free',
-        subscriptionTier: 'free',
-      };
-      
-      try {
-        const user = await storage.getUser(userId);
-        res.json(user || mockUser);
-      } catch (dbError) {
-        // Database not available, use mock user
-        res.json(mockUser);
+      const user = await storage.getUser(userId);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
       }
+      const { password, ...safeUser } = user as any;
+      res.json(safeUser);
     } catch (error) {
       console.error("Error fetching user:", error);
       res.status(500).json({ message: "Failed to fetch user" });
@@ -55,7 +55,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Lightweight bootstrap endpoint for checking if user has any data
   // Returns just counts to avoid loading full data sets on initial page load
-  app.get('/api/bootstrap', async (req: any, res) => {
+  app.get('/api/bootstrap', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
       
@@ -85,19 +85,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Simple user switching for demo
-  app.post('/api/switch-user', async (req: any, res) => {
-    const { userId } = req.body;
-    if (['927070657', '927070658', '927070659'].includes(userId)) {
-      req.session.mockUserId = userId;
-      res.json({ success: true });
-    } else {
-      res.status(400).json({ error: 'Invalid user ID' });
-    }
-  });
-
   // Stripe subscription routes
-  app.post("/api/create-subscription", async (req: any, res) => {
+  app.post("/api/create-subscription", isAuthenticated, async (req: any, res) => {
     if (!stripe) {
       return res.status(503).json({ message: "Payment processing is not available" });
     }
@@ -199,7 +188,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // One-time tool purchases
-  app.post("/api/purchase-tool", async (req: any, res) => {
+  app.post("/api/purchase-tool", isAuthenticated, async (req: any, res) => {
     if (!stripe) {
       return res.status(503).json({ message: "Payment processing is not available" });
     }
@@ -227,7 +216,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Cancel subscription
-  app.post("/api/cancel-subscription", async (req: any, res) => {
+  app.post("/api/cancel-subscription", isAuthenticated, async (req: any, res) => {
     if (!stripe) {
       return res.status(503).json({ message: "Payment processing is not available" });
     }
@@ -258,7 +247,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Resume subscription
-  app.post("/api/resume-subscription", async (req: any, res) => {
+  app.post("/api/resume-subscription", isAuthenticated, async (req: any, res) => {
     if (!stripe) {
       return res.status(503).json({ message: "Payment processing is not available" });
     }
@@ -289,7 +278,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Get subscription status
-  app.get("/api/subscription-status", async (req: any, res) => {
+  app.get("/api/subscription-status", isAuthenticated, async (req: any, res) => {
     if (!stripe) {
       return res.json({ 
         status: 'none', 
@@ -574,26 +563,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Admin-only middleware
-  const requireAdmin = async (req: any, res: any, next: any) => {
-    try {
-      const userId = req.user?.claims?.sub;
-      if (!userId) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-
-      const user = await storage.getUser(userId);
-      if (!user || (user.role !== 'admin' && user.role !== 'superuser')) {
-        return res.status(403).json({ message: "Forbidden: Admin access required" });
-      }
-
-      next();
-    } catch (error) {
-      console.error("Admin check error:", error);
-      res.status(500).json({ message: "Server error" });
-    }
-  };
-
   // Test statistics endpoint - Admin only
   app.get("/api/test-statistics", requireAdmin, async (req, res) => {
     try {
@@ -616,7 +585,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/user-achievements", async (req, res) => {
+  app.get("/api/user-achievements", isAuthenticated, async (req, res) => {
     try {
       const userId = ((req as any).user?.claims?.sub);
       const userAchievements = await storage.getUserAchievements(userId);
@@ -627,7 +596,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/user-stats", async (req, res) => {
+  app.get("/api/user-stats", isAuthenticated, async (req, res) => {
     try {
       const userId = ((req as any).user?.claims?.sub);
       const userStats = await storage.getUserStats(userId);
@@ -638,7 +607,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/track-activity", async (req, res) => {
+  app.post("/api/track-activity", isAuthenticated, async (req, res) => {
     try {
       const { activity, amount } = req.body;
       const userId = ((req as any).user?.claims?.sub);
@@ -692,8 +661,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Create test user
-  app.post("/api/create-test-user", async (req, res) => {
+  // Create test user (admin/dev only)
+  app.post("/api/create-test-user", requireAdmin, async (req, res) => {
     try {
       const { email, testGroup, subscriptionTier } = req.body;
       
@@ -713,20 +682,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // User routes
-  app.get('/api/user', async (req, res) => {
-    if (!req.isAuthenticated()) {
-      return res.sendStatus(401);
-    }
-    res.json(req.user);
+  app.get('/api/user', isAuthenticated, async (req: any, res) => {
+    const user = await storage.getUser(req.user.claims.sub);
+    if (!user) return res.sendStatus(404);
+    const { password, ...safeUser } = user as any;
+    res.json(safeUser);
   });
 
   // Todo routes
-  app.get('/api/todos', async (req: any, res) => {
+  app.get('/api/todos', isAuthenticated, async (req: any, res) => {
     const todos = await storage.getTodosByUserId(req.user.claims.sub);
     res.json(todos);
   });
 
-  app.post('/api/todos', async (req: any, res) => {
+  app.post('/api/todos', isAuthenticated, async (req: any, res) => {
     try {
       const todoData = insertTodoSchema.parse({ ...req.body, userId: req.user.claims.sub });
       const todo = await storage.createTodo(todoData);
@@ -736,20 +705,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.patch('/api/todos/:id', async (req: any, res) => {
+  app.patch('/api/todos/:id', isAuthenticated, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id);
-      const todo = await storage.updateTodo(id, req.body);
+      const todo = await storage.updateTodo(id, req.user.claims.sub, req.body);
+      if (!todo) return res.status(404).json({ message: "Todo not found" });
       res.json(todo);
     } catch (error: any) {
       res.status(400).json({ message: error.message });
     }
   });
 
-  app.delete('/api/todos/:id', async (req: any, res) => {
+  app.delete('/api/todos/:id', isAuthenticated, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id);
-      await storage.deleteTodo(id);
+      const deleted = await storage.deleteTodo(id, req.user.claims.sub);
+      if (!deleted) return res.status(404).json({ message: "Todo not found" });
       res.sendStatus(204);
     } catch (error: any) {
       res.status(400).json({ message: error.message });
@@ -757,12 +728,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Notes routes
-  app.get('/api/notes', async (req: any, res) => {
+  app.get('/api/notes', isAuthenticated, async (req: any, res) => {
     const notes = await storage.getNotesByUserId(req.user.claims.sub);
     res.json(notes);
   });
 
-  app.post('/api/notes', async (req: any, res) => {
+  app.post('/api/notes', isAuthenticated, async (req: any, res) => {
     try {
       const noteData = insertNoteSchema.parse({ ...req.body, userId: req.user.claims.sub });
       const note = await storage.createNote(noteData);
@@ -772,20 +743,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.patch('/api/notes/:id', async (req: any, res) => {
+  app.patch('/api/notes/:id', isAuthenticated, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id);
-      const note = await storage.updateNote(id, req.body);
+      const note = await storage.updateNote(id, req.user.claims.sub, req.body);
+      if (!note) return res.status(404).json({ message: "Note not found" });
       res.json(note);
     } catch (error: any) {
       res.status(400).json({ message: error.message });
     }
   });
 
-  app.delete('/api/notes/:id', async (req: any, res) => {
+  app.delete('/api/notes/:id', isAuthenticated, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id);
-      await storage.deleteNote(id);
+      const deleted = await storage.deleteNote(id, req.user.claims.sub);
+      if (!deleted) return res.status(404).json({ message: "Note not found" });
       res.sendStatus(204);
     } catch (error: any) {
       res.status(400).json({ message: error.message });
@@ -793,12 +766,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Voice recordings routes
-  app.get('/api/voice-recordings', async (req: any, res) => {
+  app.get('/api/voice-recordings', isAuthenticated, async (req: any, res) => {
     const recordings = await storage.getVoiceRecordingsByUserId(req.user.claims.sub);
     res.json(recordings);
   });
 
-  app.post('/api/voice-recordings', async (req: any, res) => {
+  app.post('/api/voice-recordings', isAuthenticated, async (req: any, res) => {
     try {
       const recordingData = insertVoiceRecordingSchema.parse({ ...req.body, userId: req.user.claims.sub });
       const recording = await storage.createVoiceRecording(recordingData);
@@ -808,21 +781,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.patch('/api/voice-recordings/:id', async (req: any, res) => {
+  app.patch('/api/voice-recordings/:id', isAuthenticated, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id);
-      const updateData = req.body;
-      const recording = await storage.updateVoiceRecording(id, updateData);
+      const recording = await storage.updateVoiceRecording(id, req.user.claims.sub, req.body);
+      if (!recording) return res.status(404).json({ message: "Recording not found" });
       res.json(recording);
     } catch (error: any) {
       res.status(400).json({ message: error.message });
     }
   });
 
-  app.delete('/api/voice-recordings/:id', async (req: any, res) => {
+  app.delete('/api/voice-recordings/:id', isAuthenticated, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id);
-      await storage.deleteVoiceRecording(id);
+      const deleted = await storage.deleteVoiceRecording(id, req.user.claims.sub);
+      if (!deleted) return res.status(404).json({ message: "Recording not found" });
       res.sendStatus(204);
     } catch (error: any) {
       res.status(400).json({ message: error.message });
@@ -830,12 +804,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Flashcard decks routes
-  app.get('/api/flashcard-decks', async (req: any, res) => {
+  app.get('/api/flashcard-decks', isAuthenticated, async (req: any, res) => {
     const decks = await storage.getFlashcardDecksByUserId(req.user.claims.sub);
     res.json(decks);
   });
 
-  app.post('/api/flashcard-decks', async (req: any, res) => {
+  app.post('/api/flashcard-decks', isAuthenticated, async (req: any, res) => {
     try {
       const deckData = insertFlashcardDeckSchema.parse({ ...req.body, userId: req.user.claims.sub });
       const deck = await storage.createFlashcardDeck(deckData);
@@ -845,11 +819,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.delete('/api/flashcard-decks/:id', async (req, res) => {
-    if (!req.user) return res.sendStatus(401);
+  app.delete('/api/flashcard-decks/:id', isAuthenticated, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id);
-      await storage.deleteFlashcardDeck(id);
+      const deleted = await storage.deleteFlashcardDeck(id, req.user.claims.sub);
+      if (!deleted) return res.status(404).json({ message: "Deck not found" });
       res.sendStatus(204);
     } catch (error: any) {
       res.status(400).json({ message: error.message });
@@ -857,15 +831,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Flashcards routes
-  app.get('/api/flashcards/:deckId', async (req, res) => {
-    if (!req.user) return res.sendStatus(401);
+  app.get('/api/flashcards/:deckId', isAuthenticated, async (req: any, res) => {
     const deckId = parseInt(req.params.deckId);
     const flashcards = await storage.getFlashcardsByDeckId(deckId);
     res.json(flashcards);
   });
 
-  app.post('/api/flashcards', async (req, res) => {
-    if (!req.user) return res.sendStatus(401);
+  app.post('/api/flashcards', isAuthenticated, async (req: any, res) => {
     try {
       const flashcardData = insertFlashcardSchema.parse(req.body);
       const flashcard = await storage.createFlashcard(flashcardData);
@@ -875,22 +847,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.patch('/api/flashcards/:id', async (req, res) => {
-    if (!req.user) return res.sendStatus(401);
+  app.patch('/api/flashcards/:id', isAuthenticated, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id);
-      const flashcard = await storage.updateFlashcard(id, req.body);
+      const flashcard = await storage.updateFlashcard(id, req.user.claims.sub, req.body);
+      if (!flashcard) return res.status(404).json({ message: "Flashcard not found" });
       res.json(flashcard);
     } catch (error: any) {
       res.status(400).json({ message: error.message });
     }
   });
 
-  app.delete('/api/flashcards/:id', async (req, res) => {
-    if (!req.user) return res.sendStatus(401);
+  app.delete('/api/flashcards/:id', isAuthenticated, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id);
-      await storage.deleteFlashcard(id);
+      const deleted = await storage.deleteFlashcard(id, req.user.claims.sub);
+      if (!deleted) return res.status(404).json({ message: "Flashcard not found" });
       res.sendStatus(204);
     } catch (error: any) {
       res.status(400).json({ message: error.message });
@@ -898,12 +870,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Habits routes
-  app.get('/api/habits', async (req: any, res) => {
+  app.get('/api/habits', isAuthenticated, async (req: any, res) => {
     const habits = await storage.getHabitsByUserId(req.user.claims.sub);
     res.json(habits);
   });
 
-  app.post('/api/habits', async (req: any, res) => {
+  app.post('/api/habits', isAuthenticated, async (req: any, res) => {
     try {
       const habitData = insertHabitSchema.parse({ ...req.body, userId: req.user.claims.sub });
       const habit = await storage.createHabit(habitData);
@@ -913,20 +885,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.patch('/api/habits/:id', async (req: any, res) => {
+  app.patch('/api/habits/:id', isAuthenticated, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id);
-      const habit = await storage.updateHabit(id, req.body);
+      const habit = await storage.updateHabit(id, req.user.claims.sub, req.body);
+      if (!habit) return res.status(404).json({ message: "Habit not found" });
       res.json(habit);
     } catch (error: any) {
       res.status(400).json({ message: error.message });
     }
   });
 
-  app.delete('/api/habits/:id', async (req: any, res) => {
+  app.delete('/api/habits/:id', isAuthenticated, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id);
-      await storage.deleteHabit(id);
+      const deleted = await storage.deleteHabit(id, req.user.claims.sub);
+      if (!deleted) return res.status(404).json({ message: "Habit not found" });
       res.sendStatus(204);
     } catch (error: any) {
       res.status(400).json({ message: error.message });
@@ -934,15 +908,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Habit logs routes
-  app.get('/api/habit-logs/:habitId', async (req, res) => {
-    if (!req.user) return res.sendStatus(401);
+  app.get('/api/habit-logs/:habitId', isAuthenticated, async (req: any, res) => {
     const habitId = parseInt(req.params.habitId);
     const logs = await storage.getHabitLogsByHabitId(habitId);
     res.json(logs);
   });
 
-  app.post('/api/habit-logs', async (req, res) => {
-    if (!req.user) return res.sendStatus(401);
+  app.post('/api/habit-logs', isAuthenticated, async (req: any, res) => {
     try {
       const logData = insertHabitLogSchema.parse(req.body);
       const log = await storage.createHabitLog(logData);
@@ -952,11 +924,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.delete('/api/habit-logs/:id', async (req, res) => {
-    if (!req.user) return res.sendStatus(401);
+  app.delete('/api/habit-logs/:id', isAuthenticated, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id);
-      await storage.deleteHabitLog(id);
+      const deleted = await storage.deleteHabitLog(id, req.user.claims.sub);
+      if (!deleted) return res.status(404).json({ message: "Habit log not found" });
       res.sendStatus(204);
     } catch (error: any) {
       res.status(400).json({ message: error.message });
@@ -964,12 +936,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Feedback routes
-  app.get('/api/feedback', async (req: any, res) => {
+  app.get('/api/feedback', isAuthenticated, async (req: any, res) => {
     const feedback = await storage.getFeedbackByUserId(req.user.claims.sub);
     res.json(feedback);
   });
 
-  app.post('/api/feedback', async (req: any, res) => {
+  app.post('/api/feedback', isAuthenticated, async (req: any, res) => {
     try {
       const feedbackData = insertFeedbackSchema.parse({ ...req.body, userId: req.user.claims.sub });
       const feedback = await storage.createFeedback(feedbackData);
@@ -1000,16 +972,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Admin feedback management routes
-  app.get('/api/admin/feedback', async (req: any, res) => {
+  app.get('/api/admin/feedback', requireAdmin, async (req: any, res) => {
     try {
-      // Only allow admin access (you can customize this check)
-      const isLocalhost = req.hostname === 'localhost' || req.hostname === '127.0.0.1';
-      const isReplitDev = req.hostname?.includes('replit.dev');
-      
-      if (!isLocalhost && !isReplitDev) {
-        return res.status(403).json({ message: 'Admin access only' });
-      }
-      
       const allFeedback = await storage.getAllFeedback();
       res.json(allFeedback);
     } catch (error: any) {
@@ -1017,16 +981,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.patch('/api/admin/feedback/:id', async (req: any, res) => {
+  app.patch('/api/admin/feedback/:id', requireAdmin, async (req: any, res) => {
     try {
-      // Only allow admin access
-      const isLocalhost = req.hostname === 'localhost' || req.hostname === '127.0.0.1';
-      const isReplitDev = req.hostname?.includes('replit.dev');
-      
-      if (!isLocalhost && !isReplitDev) {
-        return res.status(403).json({ message: 'Admin access only' });
-      }
-      
       const id = parseInt(req.params.id);
       const { status, response } = req.body;
       
@@ -1072,13 +1028,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // IQ Test Routes
-  app.get("/api/iq-test/sessions", async (req, res) => {
+  app.get("/api/iq-test/sessions", isAuthenticated, async (req, res) => {
     try {
       const userId = ((req as any).user?.claims?.sub);
-      if (!userId) {
-        return res.status(401).json({ message: "User not authenticated" });
-      }
-
       const sessions = await storage.getIqTestSessionsByUserId(userId);
       res.json(sessions);
     } catch (error: any) {
@@ -1086,13 +1038,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/iq-test/sessions", async (req, res) => {
+  app.post("/api/iq-test/sessions", isAuthenticated, async (req, res) => {
     try {
       const userId = ((req as any).user?.claims?.sub);
-      if (!userId) {
-        return res.status(401).json({ message: "User not authenticated" });
-      }
-
       const sessionData = {
         ...req.body,
         userId,
@@ -1104,13 +1052,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/iq-test/stats", async (req, res) => {
+  app.get("/api/iq-test/stats", isAuthenticated, async (req, res) => {
     try {
       const userId = ((req as any).user?.claims?.sub);
-      if (!userId) {
-        return res.status(401).json({ message: "User not authenticated" });
-      }
-
       const stats = await storage.getIqTestStats(userId);
       res.json(stats);
     } catch (error: any) {
